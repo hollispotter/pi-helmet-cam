@@ -12,12 +12,10 @@ import logging.handlers
 import time
 import pickle
 import multiprocessing
-import googleapiclient.discovery
-import googleapiclient.http
-import googleapiclient.model
 import httplib2
 import functools
 import socket
+import requests
 try:
   import picamera
 except ImportError:
@@ -37,9 +35,6 @@ consoleHandler = logging.StreamHandler()
 consoleHandler.setFormatter(formatter)
 rootLogger.addHandler(consoleHandler)
 
-logging.getLogger('googleapiclient.discovery').setLevel(logging.CRITICAL)
-logging.getLogger('googleapiclient.discovery_cache').setLevel(logging.CRITICAL)
-
 VIDEO_DIR = os.path.join(os.path.dirname(__file__), 'video')
 UPLOADS_DIR = os.path.join(os.path.dirname(__file__), 'uploads')
 CREDENTIALS = os.path.join(os.path.dirname(__file__), '.credentials')
@@ -55,7 +50,8 @@ UPLOAD_MAX_WORKERS = 1
 ZFILL_DECIMAL = 3
 
 # 8mp V2 camera
-RESOLUTION = (1640, 1232)
+# RESOLUTION = (1640, 1232)
+RESOLUTION = (1280, 720)
 FRAMERATE = 30
 STABILIZATION = False
 
@@ -68,7 +64,7 @@ SPACE_CHECK_INTERVAL = 30
 # what % of disk space must be free to start a new video
 REQUIRED_FREE_SPACE_PERCENT = 15  # about an hour with 64gb card
 
-YOUTUBE_TITLE_PREFIX = 'Helmet Camera'
+YOUTUBE_TITLE_PREFIX = 'Bandit Camera'
 
 DATE_FORMAT = '%Y-%m-%d_%H-%M'
 
@@ -242,18 +238,6 @@ def watch():
     if queue:
       logging.debug('Upload queue: %s', queue)
 
-    if is_connected():
-      for video in sorted(os.listdir(VIDEO_DIR)):
-        filename = os.path.join(VIDEO_DIR, video)
-        if filename in [i.name for i in queue]:
-          continue
-        if os.stat(filename).st_size < MIN_VIDEO_SIZE:
-          continue
-        if len(queue) < UPLOAD_MAX_WORKERS:
-          p = multiprocessing.Process(target=upload, name=filename, args=[filename])
-          logging.debug('Starting background process %s', p)
-          p.start()
-          queue.append(p)
     time.sleep(SPACE_CHECK_INTERVAL)
 
 
@@ -294,11 +278,6 @@ def record():
     # make sure that camera is connected
     pass
   should_log = True
-  while is_connected():
-    if should_log:
-      logging.debug('Still connected to the network...')
-    time.sleep(5)
-    should_log = False
 
   now = datetime.datetime.now()
   # guard against writing into old files if system time is incorrect
@@ -330,19 +309,16 @@ def record():
       camera.split_recording(shard)
       camera.wait_recording(INTERVAL)
       intervals_recorded += 1
+      """ Capture image for webcam """
+      if intervals_recorded % 2 == 0:
+        camera.capture('image.jpg', use_video_port=True, resize=(853, 480))
+        files = {'media': open('image.jpg', 'rb')}
+        requests.post('http://', auth=('',''), files=files)
       if intervals_recorded % 10 == 0:
         logging.debug('Recorded %s intervals...', intervals_recorded)
       if shard.size > MAX_VIDEO_SIZE:
         counter += 1
         logging.debug('Using next shard %s for video file', counter)
-      if is_connected():
-        logging.info('Connected to WiFi. Not recording anymore.')
-        camera.stop_recording()
-        shard.close()
-        if is_new and intervals_recorded < VIDEO_MIN_INTERVALS:
-          logging.debug('Cleaning up short video %s (%s intervals)', shard, intervals_recorded)
-          shard.remove()
-        break
       shard = OutputShard(filename.format(str(counter).zfill(ZFILL_DECIMAL)))
   logging.info('Trying to start recording again...')
   record()
